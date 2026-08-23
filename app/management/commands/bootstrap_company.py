@@ -30,7 +30,7 @@ class Command(BaseCommand):
         owner, _ = Role.objects.update_or_create(company=company, code="owner", defaults={"name": "Владелец", "permissions": ["*"], "is_system": True})
         role_defaults = {
             "manager": ("Менеджер", ["dashboard.view", "dashboard.view_all", "clients.view", "clients.view_all", "clients.manage", "employees.view", "employees.view_all", "employees.manage", "services.view", "services.manage", "resources.view", "resources.manage", "schedule.view", "schedule.view_all", "schedule.manage", "appointments.view", "appointments.view_all", "appointments.manage", "tasks.view", "tasks.view_all", "tasks.manage", "roles.view", "audit.view", "settings.view"]),
-            "employee": ("Сотрудник", ["dashboard.view", "clients.view", "services.view", "resources.view", "schedule.view", "appointments.view", "appointments.manage", "tasks.view", "tasks.manage"]),
+            "employee": ("Сотрудник", ["dashboard.view", "clients.view", "clients.manage", "services.view", "resources.view", "schedule.view", "appointments.view", "appointments.manage", "tasks.view", "tasks.manage"]),
             "viewer": ("Наблюдатель", ["dashboard.view", "clients.view", "clients.view_all", "employees.view", "employees.view_all", "services.view", "resources.view", "schedule.view", "schedule.view_all", "appointments.view", "appointments.view_all", "tasks.view", "tasks.view_all"]),
         }
         for code, (name, permissions) in role_defaults.items():

@@ -82,10 +82,9 @@ class FoundationTests(TestCase):
 
     def test_available_slots_are_returned_per_employee(self):
         selected = timezone.localdate() + timedelta(days=1)
-        WorkSchedule.objects.create(
+        WorkSchedule.objects.filter(
             company=self.company, employee=self.member, weekday=selected.weekday(),
-            start_time=time(9), end_time=time(11),
-        )
+        ).update(start_time=time(9), end_time=time(11))
         response = self.api.get(
             "/api/v1/appointments/available-slots/",
             {"employee": self.member.id, "date": selected.isoformat(), "duration": 60},
@@ -120,3 +119,18 @@ class FoundationTests(TestCase):
         response = anonymous.head("/api/v1/health/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.content, b"")
+
+    def test_cors_preflight_allows_company_header(self):
+        response = self.api.options(
+            "/api/auth/token/",
+            HTTP_ORIGIN="http://localhost:5173",
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST",
+            HTTP_ACCESS_CONTROL_REQUEST_HEADERS="content-type,x-company-id",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("x-company-id", response["Access-Control-Allow-Headers"])
+
+    def test_new_membership_receives_default_weekday_schedule(self):
+        user = get_user_model().objects.create_user("scheduled-worker", password="safe-password")
+        membership = Membership.objects.create(company=self.company, user=user)
+        self.assertEqual(WorkSchedule.objects.filter(employee=membership).count(), 5)

@@ -1,4 +1,6 @@
 from django.contrib import admin
+from django.contrib.auth import get_user_model
+from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 
 from .models import (Appointment, AuditLog, Client, Comment, Company, Membership,
                      Resource, Role, Service, StatusDefinition, Task, TimeOff, WorkSchedule)
@@ -7,6 +9,26 @@ from .models import (Appointment, AuditLog, Client, Comment, Company, Membership
 admin.site.site_header = "Фундамент — управление системой"
 admin.site.site_title = "Фундамент"
 admin.site.index_title = "Компании, пользователи и рабочие данные"
+
+
+class MembershipInline(admin.StackedInline):
+    model = Membership
+    extra = 1
+    fields = ["company", "roles", "job_title", "phone", "color", "is_active"]
+    filter_horizontal = ["roles"]
+    verbose_name = "Доступ работника к компании"
+    verbose_name_plural = "Доступ работника к компаниям"
+
+
+User = get_user_model()
+admin.site.unregister(User)
+
+
+@admin.register(User)
+class UserAdmin(DjangoUserAdmin):
+    inlines = [MembershipInline]
+    list_display = ["username", "email", "first_name", "last_name", "is_staff", "is_active"]
+    search_fields = ["username", "first_name", "last_name", "email"]
 
 
 class CompanyFilterAdmin(admin.ModelAdmin):
