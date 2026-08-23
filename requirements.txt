@@ -1,10 +1,10 @@
-Django==6.1
-djangorestframework==3.18.0
-django-filter==26.1
+Django==5.2.15
+djangorestframework==3.17.1
+django-filter==25.2
 django-cors-headers==4.9.0
-drf-spectacular==0.30.0
-python-dotenv==1.2.3
-psycopg[binary]==3.3.4
+drf-spectacular==0.29.0
+python-dotenv==1.0.1
+psycopg[binary]==3.3.3
 whitenoise==6.12.0
-gunicorn==26.0.0
+gunicorn==25.3.0
 dj-database-url==3.1.2

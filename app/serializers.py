@@ -1,4 +1,6 @@
 from django.contrib.auth import get_user_model
+from datetime import time
+
 from django.db import transaction
 from rest_framework import serializers
 
@@ -202,4 +204,14 @@ class UserCreateSerializer(serializers.ModelSerializer):
         user = get_user_model().objects.create_user(password=password, **validated_data)
         membership = Membership.objects.create(user=user, company=self.context["view"].get_company(), job_title=job_title, phone=phone)
         membership.roles.set(roles)
+        WorkSchedule.objects.bulk_create([
+            WorkSchedule(
+                company=membership.company,
+                employee=membership,
+                weekday=weekday,
+                start_time=time(9, 0),
+                end_time=time(18, 0),
+            )
+            for weekday in range(5)
+        ])
         return user

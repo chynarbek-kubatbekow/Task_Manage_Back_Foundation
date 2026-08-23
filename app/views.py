@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from django.contrib.auth import get_user_model
 from django.db.models import Q
@@ -108,7 +108,7 @@ class RoleViewSet(TenantModelViewSet):
 
 class MembershipViewSet(TenantModelViewSet):
     module_key = "employees"
-    queryset = Membership.objects.select_related("user", "company").prefetch_related("roles")
+    queryset = Membership.objects.select_related("user", "company").prefetch_related("roles").order_by("created_at")
     serializer_class = MembershipSerializer
     filterset_fields = ["is_active", "roles"]
     search_fields = ["user__username", "user__first_name", "user__last_name", "job_title", "phone"]
@@ -221,7 +221,7 @@ class AppointmentViewSet(TenantModelViewSet):
     filterset_fields = ["employee", "client", "status"]
     search_fields = ["title", "client__first_name", "client__last_name", "client__phone", "notes"]
     ordering_fields = ["starts_at", "ends_at", "created_at"]
-    permission_map = {"list": "appointments.view", "retrieve": "appointments.view", "create": "appointments.manage", "update": "appointments.manage", "partial_update": "appointments.manage", "destroy": "appointments.manage", "cancel": "appointments.manage", "reschedule": "appointments.manage"}
+    permission_map = {"list": "appointments.view", "retrieve": "appointments.view", "create": "appointments.manage", "update": "appointments.manage", "partial_update": "appointments.manage", "destroy": "appointments.manage", "cancel": "appointments.manage", "reschedule": "appointments.manage", "available_slots": "appointments.view"}
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -243,6 +243,70 @@ class AppointmentViewSet(TenantModelViewSet):
         employee = serializer.validated_data.get("employee") if self.can_view_all("appointments") else self.request.membership
         instance = serializer.save(employee=employee)
         self._audit("update", instance)
+
+    @action(detail=False, methods=["get"], url_path="available-slots")
+    def available_slots(self, request):
+        """Return free start times for one employee on one local calendar day."""
+        company = self.get_company()
+        employee_id = request.query_params.get("employee")
+        date_value = request.query_params.get("date")
+        service_id = request.query_params.get("service")
+        try:
+            selected_date = datetime.strptime(date_value, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            return Response({"date": "Используйте формат YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            employee = Membership.objects.select_related("user").get(id=employee_id, company=company, is_active=True)
+        except (Membership.DoesNotExist, ValueError):
+            return Response({"employee": "Сотрудник не найден."}, status=status.HTTP_400_BAD_REQUEST)
+        duration = 30
+        if service_id:
+            service = Service.objects.filter(id=service_id, company=company, is_active=True).first()
+            if not service:
+                return Response({"service": "Услуга не найдена."}, status=status.HTTP_400_BAD_REQUEST)
+            duration = service.duration_minutes
+        elif request.query_params.get("duration"):
+            try:
+                duration = max(5, min(int(request.query_params["duration"]), 480))
+            except ValueError:
+                return Response({"duration": "Длительность должна быть числом."}, status=status.HTTP_400_BAD_REQUEST)
+
+        schedules = WorkSchedule.objects.filter(
+            company=company, employee=employee, weekday=selected_date.weekday(), is_active=True
+        ).filter(Q(valid_from__isnull=True) | Q(valid_from__lte=selected_date)).filter(Q(valid_to__isnull=True) | Q(valid_to__gte=selected_date))
+        day_start = timezone.make_aware(datetime.combine(selected_date, datetime.min.time()))
+        day_end = day_start + timedelta(days=1)
+        busy_query = Appointment.objects.filter(
+            company=company, employee=employee, starts_at__lt=day_end,
+            ends_at__gt=day_start, cancelled_at__isnull=True,
+        )
+        exclude_id = request.query_params.get("exclude")
+        if exclude_id:
+            busy_query = busy_query.exclude(id=exclude_id)
+        busy = list(busy_query.values_list("starts_at", "ends_at"))
+        time_off = list(TimeOff.objects.filter(
+            company=company, employee=employee, is_approved=True,
+            starts_at__lt=day_end, ends_at__gt=day_start,
+        ).values_list("starts_at", "ends_at"))
+        slots = []
+        step = timedelta(minutes=15)
+        length = timedelta(minutes=duration)
+        now = timezone.now()
+        for schedule in schedules:
+            cursor = timezone.make_aware(datetime.combine(selected_date, schedule.start_time))
+            finish = timezone.make_aware(datetime.combine(selected_date, schedule.end_time))
+            while cursor + length <= finish:
+                end = cursor + length
+                if cursor >= now and not any(start < end and stop > cursor for start, stop in busy + time_off):
+                    slots.append({"starts_at": cursor.isoformat(), "ends_at": end.isoformat()})
+                cursor += step
+        return Response({
+            "employee": str(employee.id),
+            "employee_name": employee.user.get_full_name() or employee.user.username,
+            "date": selected_date,
+            "duration_minutes": duration,
+            "slots": slots,
+        })
 
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):

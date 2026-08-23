@@ -1,12 +1,15 @@
-from datetime import timedelta
+from datetime import time, timedelta
+import os
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from .models import Appointment, Client, Company, Membership, Role, StatusDefinition
+from .models import Appointment, Client, Company, Membership, Role, StatusDefinition, WorkSchedule
 
 
 class FoundationTests(TestCase):
@@ -76,3 +79,38 @@ class FoundationTests(TestCase):
         self.company.save(update_fields=["settings"])
         response = self.api.get("/api/v1/clients/", HTTP_X_COMPANY_ID=str(self.company.id))
         self.assertEqual(response.status_code, 403)
+
+    def test_available_slots_are_returned_per_employee(self):
+        selected = timezone.localdate() + timedelta(days=1)
+        WorkSchedule.objects.create(
+            company=self.company, employee=self.member, weekday=selected.weekday(),
+            start_time=time(9), end_time=time(11),
+        )
+        response = self.api.get(
+            "/api/v1/appointments/available-slots/",
+            {"employee": self.member.id, "date": selected.isoformat(), "duration": 60},
+            HTTP_X_COMPANY_ID=str(self.company.id),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data["slots"]), 5)
+        self.assertEqual(response.data["duration_minutes"], 60)
+
+    def test_environment_bootstrap_is_idempotent_and_keeps_password(self):
+        variables = {
+            "BOOTSTRAP_COMPANY_NAME": "Environment Company",
+            "BOOTSTRAP_COMPANY_SLUG": "environment-company",
+            "BOOTSTRAP_ADMIN_USERNAME": "environment-owner",
+            "BOOTSTRAP_ADMIN_EMAIL": "owner@example.com",
+            "BOOTSTRAP_ADMIN_PASSWORD": "InitialStrongPassword123!",
+        }
+        with patch.dict(os.environ, variables):
+            call_command("bootstrap_from_env")
+        user = get_user_model().objects.get(username="environment-owner")
+        self.assertTrue(user.check_password("InitialStrongPassword123!"))
+        self.assertTrue(user.is_staff)
+        self.assertTrue(user.is_superuser)
+        with patch.dict(os.environ, {**variables, "BOOTSTRAP_ADMIN_PASSWORD": "DoNotReplacePassword123!"}):
+            call_command("bootstrap_from_env")
+        user.refresh_from_db()
+        self.assertTrue(user.check_password("InitialStrongPassword123!"))
+        self.assertEqual(Membership.objects.filter(user=user, company__slug="environment-company").count(), 1)
