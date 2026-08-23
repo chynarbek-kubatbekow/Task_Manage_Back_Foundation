@@ -19,7 +19,10 @@ from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework.authtoken.views import obtain_auth_token
 
+from app.views import HealthView
+
 urlpatterns = [
+    path('', HealthView.as_view(), name='root-health'),
     path('admin/', admin.site.urls),
     path('api/v1/', include('app.urls')),
     path('api/auth/', include('rest_framework.urls')),

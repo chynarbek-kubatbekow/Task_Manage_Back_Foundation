@@ -121,6 +121,15 @@ class FoundationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.content, b"")
 
+    def test_backend_root_is_health_endpoint(self):
+        anonymous = APIClient()
+        response = anonymous.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, {"status": "ok"})
+        response = anonymous.head("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"")
+
     def test_cors_preflight_allows_company_header(self):
         response = self.api.options(
             "/api/auth/token/",
