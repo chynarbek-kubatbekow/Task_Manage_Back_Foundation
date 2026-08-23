@@ -1,6 +1,8 @@
+from django import forms
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
+from django.db import models as django_models
 
 from .models import (Appointment, AuditLog, Client, Comment, Company, Membership,
                      Resource, Role, Service, StatusDefinition, Task, TimeOff, WorkSchedule)
@@ -15,9 +17,18 @@ class MembershipInline(admin.StackedInline):
     model = Membership
     extra = 1
     fields = ["company", "roles", "job_title", "phone", "color", "is_active"]
-    filter_horizontal = ["roles"]
+    formfield_overrides = {
+        django_models.ManyToManyField: {"widget": forms.CheckboxSelectMultiple},
+    }
     verbose_name = "Доступ работника к компании"
     verbose_name_plural = "Доступ работника к компаниям"
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        field = super().formfield_for_foreignkey(db_field, request, **kwargs)
+        if db_field.name == "company":
+            field.label = "Клиника"
+            field.queryset = field.queryset.order_by("name")
+        return field
 
 
 User = get_user_model()
@@ -35,6 +46,13 @@ class CompanyFilterAdmin(admin.ModelAdmin):
     list_filter = ["company"]
     autocomplete_fields = []
 
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        field = super().formfield_for_foreignkey(db_field, request, **kwargs)
+        if db_field.name == "company":
+            field.label = "Клиника"
+            field.queryset = field.queryset.order_by("name")
+        return field
+
 
 @admin.register(Company)
 class CompanyAdmin(admin.ModelAdmin):
@@ -46,6 +64,62 @@ class CompanyAdmin(admin.ModelAdmin):
 
 @admin.register(Role)
 class RoleAdmin(CompanyFilterAdmin):
+    PERMISSION_CHOICES = [
+        ("dashboard.view", "Главная: просмотр"),
+        ("dashboard.view_all", "Главная: видеть всю компанию"),
+        ("clients.view", "Пациенты: просмотр"),
+        ("clients.manage", "Пациенты: добавление, изменение и архив"),
+        ("clients.view_all", "Пациенты: видеть всю компанию"),
+        ("appointments.view", "Записи: просмотр"),
+        ("appointments.manage", "Записи: создание, перенос и удаление"),
+        ("appointments.view_all", "Записи: видеть всех врачей"),
+        ("schedule.view", "График: просмотр"),
+        ("schedule.manage", "График: изменение"),
+        ("schedule.view_all", "График: видеть всю команду"),
+        ("tasks.view", "Задачи: просмотр"),
+        ("tasks.manage", "Задачи: управление"),
+        ("tasks.view_all", "Задачи: видеть всю команду"),
+        ("employees.view", "Работники: просмотр"),
+        ("employees.manage", "Работники: управление"),
+        ("employees.view_all", "Работники: видеть всю команду"),
+        ("services.view", "Услуги: просмотр"),
+        ("services.manage", "Услуги: управление"),
+        ("resources.view", "Кабинеты и ресурсы: просмотр"),
+        ("resources.manage", "Кабинеты и ресурсы: управление"),
+        ("settings.view", "Настройки: просмотр"),
+        ("settings.manage", "Настройки: управление"),
+        ("roles.view", "Роли: просмотр"),
+        ("roles.manage", "Роли: управление"),
+        ("audit.view", "История действий: просмотр"),
+    ]
+
+    class RoleForm(forms.ModelForm):
+        permission_flags = forms.MultipleChoiceField(
+            label="Возможности роли",
+            choices=[],
+            required=False,
+            widget=forms.CheckboxSelectMultiple,
+            help_text="Поставьте галочки напротив разрешённых действий.",
+        )
+
+        class Meta:
+            model = Role
+            exclude = ["permissions"]
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.fields["permission_flags"].choices = RoleAdmin.PERMISSION_CHOICES
+            if self.instance and self.instance.pk:
+                self.initial["permission_flags"] = self.instance.permissions
+
+        def save(self, commit=True):
+            instance = super().save(commit=False)
+            instance.permissions = self.cleaned_data.get("permission_flags", [])
+            if commit:
+                instance.save()
+            return instance
+
+    form = RoleForm
     list_display = ["name", "code", "company", "is_system"]
     search_fields = ["name", "code", "company__name"]
     prepopulated_fields = {"code": ("name",)}

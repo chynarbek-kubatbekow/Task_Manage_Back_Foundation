@@ -259,7 +259,7 @@ class AppointmentViewSet(TenantModelViewSet):
             employee = Membership.objects.select_related("user").get(id=employee_id, company=company, is_active=True)
         except (Membership.DoesNotExist, ValueError):
             return Response({"employee": "Сотрудник не найден."}, status=status.HTTP_400_BAD_REQUEST)
-        duration = 30
+        duration = 60
         if service_id:
             service = Service.objects.filter(id=service_id, company=company, is_active=True).first()
             if not service:
@@ -270,6 +270,10 @@ class AppointmentViewSet(TenantModelViewSet):
                 duration = max(5, min(int(request.query_params["duration"]), 480))
             except ValueError:
                 return Response({"duration": "Длительность должна быть числом."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            slot_step = max(1, min(int(request.query_params.get("step", 60)), 120))
+        except ValueError:
+            return Response({"step": "Шаг времени должен быть числом."}, status=status.HTTP_400_BAD_REQUEST)
 
         schedules = WorkSchedule.objects.filter(
             company=company, employee=employee, weekday=selected_date.weekday(), is_active=True
@@ -289,7 +293,7 @@ class AppointmentViewSet(TenantModelViewSet):
             starts_at__lt=day_end, ends_at__gt=day_start,
         ).values_list("starts_at", "ends_at"))
         slots = []
-        step = timedelta(minutes=15)
+        step = timedelta(minutes=slot_step)
         length = timedelta(minutes=duration)
         now = timezone.now()
         for schedule in schedules:
@@ -305,6 +309,7 @@ class AppointmentViewSet(TenantModelViewSet):
             "employee_name": employee.user.get_full_name() or employee.user.username,
             "date": selected_date,
             "duration_minutes": duration,
+            "step_minutes": slot_step,
             "slots": slots,
         })
 

@@ -1,4 +1,4 @@
-from datetime import time, timedelta
+from datetime import datetime, time, timedelta
 import os
 from unittest.mock import patch
 
@@ -91,8 +91,9 @@ class FoundationTests(TestCase):
             HTTP_X_COMPANY_ID=str(self.company.id),
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.data["slots"]), 5)
+        self.assertEqual(len(response.data["slots"]), 2)
         self.assertEqual(response.data["duration_minutes"], 60)
+        self.assertEqual(response.data["step_minutes"], 60)
 
     def test_environment_bootstrap_is_idempotent_and_keeps_password(self):
         variables = {
@@ -134,3 +135,33 @@ class FoundationTests(TestCase):
         user = get_user_model().objects.create_user("scheduled-worker", password="safe-password")
         membership = Membership.objects.create(company=self.company, user=user)
         self.assertEqual(WorkSchedule.objects.filter(employee=membership).count(), 5)
+
+    def test_worker_can_create_ninety_minute_appointment_at_exact_minute_and_delete_it(self):
+        selected = timezone.localdate() + timedelta(days=1)
+        while selected.weekday() >= 5:
+            selected += timedelta(days=1)
+        starts_at = timezone.make_aware(datetime.combine(selected, time(10, 7)))
+        response = self.api.post(
+            "/api/v1/appointments/",
+            {
+                "title": "Exact time appointment",
+                "client": str(self.client.id),
+                "employee": str(self.member.id),
+                "status": str(self.status.id),
+                "resources": [],
+                "starts_at": starts_at.isoformat(),
+                "ends_at": (starts_at + timedelta(minutes=90)).isoformat(),
+                "notes": "",
+                "extra_data": {},
+            },
+            format="json",
+            HTTP_X_COMPANY_ID=str(self.company.id),
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        appointment_id = response.data["id"]
+        response = self.api.delete(
+            f"/api/v1/appointments/{appointment_id}/",
+            HTTP_X_COMPANY_ID=str(self.company.id),
+        )
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Appointment.objects.filter(id=appointment_id).exists())

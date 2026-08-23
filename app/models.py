@@ -106,7 +106,7 @@ class Client(CompanyOwnedModel):
 class Service(CompanyOwnedModel):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True)
-    duration_minutes = models.PositiveIntegerField(default=30)
+    duration_minutes = models.PositiveIntegerField(default=60)
     price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     category = models.CharField(max_length=100, blank=True)
     is_active = models.BooleanField(default=True)

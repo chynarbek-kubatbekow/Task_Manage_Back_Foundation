@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import models, transaction
+from django.utils import timezone
 from rest_framework import serializers
 
 from .models import (Appointment, AuditLog, Client, Comment, Company, Membership,
@@ -138,6 +139,30 @@ class AppointmentSerializer(CleanModelSerializer):
         starts_at = attrs.get("starts_at", getattr(self.instance, "starts_at", None))
         ends_at = attrs.get("ends_at", getattr(self.instance, "ends_at", None))
         resources = attrs.get("resources", [])
+        employee = attrs.get("employee", getattr(self.instance, "employee", None))
+        company = self.context["view"].get_company()
+        if starts_at and ends_at and employee:
+            local_start = timezone.localtime(starts_at)
+            local_end = timezone.localtime(ends_at)
+            schedule_exists = WorkSchedule.objects.filter(
+                company=company,
+                employee=employee,
+                weekday=local_start.weekday(),
+                is_active=True,
+                start_time__lte=local_start.time().replace(tzinfo=None),
+                end_time__gte=local_end.time().replace(tzinfo=None),
+            ).filter(
+                models.Q(valid_from__isnull=True) | models.Q(valid_from__lte=local_start.date())
+            ).filter(
+                models.Q(valid_to__isnull=True) | models.Q(valid_to__gte=local_start.date())
+            ).exists()
+            if local_start.date() != local_end.date() or not schedule_exists:
+                raise serializers.ValidationError({"starts_at": "Время находится вне рабочего графика сотрудника."})
+            if TimeOff.objects.filter(
+                company=company, employee=employee, is_approved=True,
+                starts_at__lt=ends_at, ends_at__gt=starts_at,
+            ).exists():
+                raise serializers.ValidationError({"starts_at": "На это время у сотрудника запланировано отсутствие."})
         if starts_at and ends_at and resources:
             overlap = Appointment.objects.filter(company=self.context["view"].get_company(), resources__in=resources, starts_at__lt=ends_at, ends_at__gt=starts_at, cancelled_at__isnull=True)
             if self.instance:
