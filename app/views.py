@@ -512,3 +512,8 @@ class HealthView(APIView):
         except Exception:
             return Response({"status": "database_unavailable"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         return Response({"status": "ok"})
+
+    def head(self, request):
+        response = self.get(request)
+        response.data = None
+        return response

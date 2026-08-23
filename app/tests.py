@@ -114,3 +114,9 @@ class FoundationTests(TestCase):
         user.refresh_from_db()
         self.assertTrue(user.check_password("InitialStrongPassword123!"))
         self.assertEqual(Membership.objects.filter(user=user, company__slug="environment-company").count(), 1)
+
+    def test_health_supports_head_without_authentication(self):
+        anonymous = APIClient()
+        response = anonymous.head("/api/v1/health/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"")
