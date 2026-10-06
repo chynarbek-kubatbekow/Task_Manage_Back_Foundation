@@ -32,6 +32,20 @@ class FoundationTests(TestCase):
         self.assertEqual(response.data["count"], 1)
         self.assertEqual(response.data["results"][0]["first_name"], "Ivan")
 
+    def test_patient_profile_and_company_numbers(self):
+        second = Client.objects.create(company=self.company, first_name="Anna")
+        self.assertEqual(self.member.employee_number, 1)
+        self.assertEqual(self.client.patient_number, 1)
+        self.assertEqual(second.patient_number, 2)
+        response = self.api.patch(
+            f"/api/v1/clients/{second.id}/",
+            {"patronymic": "Sergeevna", "diagnosis": "Caries", "doctor_notes": "Control visit", "primary_doctor": str(self.member.id)},
+            format="json", HTTP_X_COMPANY_ID=str(self.company.id),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["patient_number"], 2)
+        self.assertEqual(response.data["primary_doctor_detail"]["employee_number"], 1)
+
     def test_role_denies_ungranted_resource(self):
         response = self.api.get("/api/v1/tasks/", HTTP_X_COMPANY_ID=str(self.company.id))
         self.assertEqual(response.status_code, 403)

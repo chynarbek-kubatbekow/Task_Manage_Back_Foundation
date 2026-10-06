@@ -138,13 +138,13 @@ class ClientViewSet(TenantModelViewSet):
     queryset = Client.objects.all()
     serializer_class = ClientSerializer
     filterset_fields = ["is_active"]
-    search_fields = ["first_name", "last_name", "phone", "email", "notes"]
-    ordering_fields = ["created_at", "updated_at", "first_name", "last_name"]
+    search_fields = ["=patient_number", "first_name", "last_name", "patronymic", "phone", "email", "diagnosis", "doctor_notes", "notes"]
+    ordering_fields = ["patient_number", "created_at", "updated_at", "first_name", "last_name"]
     permission_map = {"list": "clients.view", "retrieve": "clients.view", "create": "clients.manage", "update": "clients.manage", "partial_update": "clients.manage", "destroy": "clients.manage"}
 
     def get_queryset(self):
         qs = super().get_queryset()
-        if self.can_view_all("clients"):
+        if self.can_view_all("clients") or self.has_product_permission("clients.manage"):
             return qs
         return qs.filter(appointments__employee=self.request.membership).distinct()
 
@@ -229,9 +229,9 @@ class AppointmentViewSet(TenantModelViewSet):
             qs = qs.filter(employee=self.request.membership)
         start, end = self.request.query_params.get("start"), self.request.query_params.get("end")
         if start:
-            qs = qs.filter(ends_at__gte=start)
+            qs = qs.filter(ends_at__gt=start)
         if end:
-            qs = qs.filter(starts_at__lte=end)
+            qs = qs.filter(starts_at__lt=end)
         return qs
 
     def perform_create(self, serializer):

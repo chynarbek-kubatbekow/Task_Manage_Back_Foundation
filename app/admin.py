@@ -127,7 +127,7 @@ class RoleAdmin(CompanyFilterAdmin):
 
 @admin.register(Membership)
 class MembershipAdmin(CompanyFilterAdmin):
-    list_display = ["user", "company", "job_title", "is_active"]
+    list_display = ["employee_number", "user", "company", "job_title", "is_active"]
     list_filter = ["company", "is_active", "roles"]
     search_fields = ["user__username", "user__first_name", "user__last_name", "phone", "job_title"]
     filter_horizontal = ["roles"]
@@ -135,9 +135,9 @@ class MembershipAdmin(CompanyFilterAdmin):
 
 @admin.register(Client)
 class ClientAdmin(CompanyFilterAdmin):
-    list_display = ["__str__", "company", "phone", "email", "is_active", "updated_at"]
+    list_display = ["patient_number", "__str__", "company", "phone", "primary_doctor", "is_active", "updated_at"]
     list_filter = ["company", "is_active"]
-    search_fields = ["first_name", "last_name", "phone", "email", "notes"]
+    search_fields = ["first_name", "last_name", "patronymic", "phone", "email", "diagnosis", "doctor_notes", "notes"]
 
 
 @admin.register(Service)

@@ -2,8 +2,8 @@ import uuid
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import models
-from django.db.models import Q
+from django.db import models, transaction
+from django.db.models import Max, Q
 
 
 class TimestampedModel(models.Model):
@@ -60,11 +60,24 @@ class Membership(TimestampedModel):
     color = models.CharField(max_length=16, default="#64748b")
     is_active = models.BooleanField(default=True)
     extra_data = models.JSONField(default=dict, blank=True)
+    employee_number = models.PositiveIntegerField(null=True, blank=True, editable=False)
 
     class Meta:
         verbose_name = "Сотрудник компании"
         verbose_name_plural = "Сотрудники компаний"
-        constraints = [models.UniqueConstraint(fields=["user", "company"], name="unique_company_member")]
+        constraints = [
+            models.UniqueConstraint(fields=["user", "company"], name="unique_company_member"),
+            models.UniqueConstraint(fields=["company", "employee_number"], name="unique_company_employee_number"),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.employee_number is None and self.company_id:
+            with transaction.atomic():
+                Company.objects.select_for_update().get(pk=self.company_id)
+                current = Membership.objects.filter(company_id=self.company_id).aggregate(value=Max("employee_number"))["value"] or 0
+                self.employee_number = current + 1
+                return super().save(*args, **kwargs)
+        return super().save(*args, **kwargs)
 
     def has_permission(self, permission):
         if self.user.is_superuser:
@@ -83,12 +96,17 @@ class CompanyOwnedModel(TimestampedModel):
 
 
 class Client(CompanyOwnedModel):
+    patient_number = models.PositiveIntegerField(null=True, blank=True, editable=False)
     first_name = models.CharField(max_length=100)
     last_name = models.CharField(max_length=100, blank=True)
+    patronymic = models.CharField(max_length=100, blank=True)
     phone = models.CharField(max_length=32, blank=True)
     email = models.EmailField(blank=True)
     birth_date = models.DateField(null=True, blank=True)
     notes = models.TextField(blank=True)
+    diagnosis = models.TextField(blank=True)
+    doctor_notes = models.TextField(blank=True)
+    primary_doctor = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="primary_clients")
     tags = models.JSONField(default=list, blank=True)
     extra_data = models.JSONField(default=dict, blank=True, help_text="Настраиваемые поля клиента")
     is_active = models.BooleanField(default=True)
@@ -96,8 +114,22 @@ class Client(CompanyOwnedModel):
     class Meta:
         verbose_name = "Клиент"
         verbose_name_plural = "Клиенты"
-        ordering = ["last_name", "first_name"]
+        ordering = ["patient_number", "last_name", "first_name"]
         indexes = [models.Index(fields=["company", "phone"]), models.Index(fields=["company", "email"])]
+        constraints = [models.UniqueConstraint(fields=["company", "patient_number"], name="unique_company_patient_number")]
+
+    def clean(self):
+        if self.primary_doctor_id and self.primary_doctor.company_id != self.company_id:
+            raise ValidationError("Лечащий врач должен принадлежать той же компании.")
+
+    def save(self, *args, **kwargs):
+        if self.patient_number is None and self.company_id:
+            with transaction.atomic():
+                Company.objects.select_for_update().get(pk=self.company_id)
+                current = Client.objects.filter(company_id=self.company_id).aggregate(value=Max("patient_number"))["value"] or 0
+                self.patient_number = current + 1
+                return super().save(*args, **kwargs)
+        return super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.first_name} {self.last_name}".strip()

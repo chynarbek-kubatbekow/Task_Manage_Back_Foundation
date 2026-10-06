@@ -74,9 +74,28 @@ class MembershipSerializer(serializers.ModelSerializer):
 
 
 class ClientSerializer(serializers.ModelSerializer):
+    primary_doctor_detail = MembershipSerializer(source="primary_doctor", read_only=True)
+
     class Meta:
         model = Client
         exclude = ["company"]
+
+    def validate_primary_doctor(self, doctor):
+        if doctor and doctor.company_id != self.context["view"].get_company().id:
+            raise serializers.ValidationError("Лечащий врач принадлежит другой компании.")
+        return doctor
+
+
+class PublicBookingClientSerializer(serializers.ModelSerializer):
+    """Deliberately excludes all clinical and internal staff fields.
+
+    Reserved for the future patient-facing booking API; it is not wired to a
+    public endpoint yet.
+    """
+
+    class Meta:
+        model = Client
+        fields = ["first_name", "last_name", "patronymic", "phone", "email", "birth_date"]
 
 
 class ServiceSerializer(serializers.ModelSerializer):
