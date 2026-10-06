@@ -6,13 +6,20 @@ from django.db import migrations, models
 
 
 def assign_company_numbers(apps, schema_editor):
+    database = schema_editor.connection.alias
     for model_name, field_name in (("Client", "patient_number"), ("Membership", "employee_number")):
         model = apps.get_model("app", model_name)
-        company_ids = model.objects.values_list("company_id", flat=True).distinct()
+        records = model.objects.using(database)
+        company_ids = records.order_by().values_list("company_id", flat=True).distinct()
         for company_id in company_ids:
-            for number, item in enumerate(model.objects.filter(company_id=company_id).order_by("created_at", "id"), 1):
-                setattr(item, field_name, number)
-                item.save(update_fields=[field_name])
+            ids = records.filter(company_id=company_id).order_by("created_at", "id").values_list("id", flat=True)
+            for number, item_id in enumerate(ids, 1):
+                records.filter(pk=item_id).update(**{field_name: number})
+    if schema_editor.connection.vendor == "postgresql":
+        # AddField also defers creation of the primary_doctor index until the
+        # schema editor exits. Fire pending constraint triggers before that DDL,
+        # preserving the migration's all-or-nothing transaction.
+        schema_editor.connection.check_constraints()
 
 
 class Migration(migrations.Migration):
@@ -57,7 +64,6 @@ class Migration(migrations.Migration):
             name='employee_number',
             field=models.PositiveIntegerField(blank=True, editable=False, null=True),
         ),
-        migrations.RunPython(assign_company_numbers, migrations.RunPython.noop),
         migrations.AddConstraint(
             model_name='client',
             constraint=models.UniqueConstraint(fields=('company', 'patient_number'), name='unique_company_patient_number'),
@@ -66,4 +72,9 @@ class Migration(migrations.Migration):
             model_name='membership',
             constraint=models.UniqueConstraint(fields=('company', 'employee_number'), name='unique_company_employee_number'),
         ),
+        # Both new number columns are nullable, so constraints can be installed
+        # before backfilling. Keep all ALTER TABLE operations ahead of data writes:
+        # PostgreSQL queues deferred FK trigger events during the updates and
+        # refuses subsequent ALTER TABLE operations until those events are fired.
+        migrations.RunPython(assign_company_numbers, migrations.RunPython.noop),
     ]

@@ -67,11 +67,14 @@ Render Health Check Path: `/api/v1/health/`.
 | Установка пакетов падает | Активную версию Python и первую ошибку pip; установленный `PYTHON_VERSION` перекрывает `.python-version` |
 | `DATABASE_URL is required` / `Render requires a PostgreSQL` | Переменную базы в окружении Web Service |
 | `OperationalError` при миграциях | Доступность PostgreSQL, hostname, имя базы, SSL и актуальные учётные данные |
+| `cannot ALTER TABLE app_client because it has pending trigger events` на `app.0004` | Доставьте исправленную `0004_alter_client_options_client_diagnosis_and_more.py`: ограничения устанавливаются до заполнения номеров, затем выполняются отложенные проверки до создания индекса |
 | Старый `BOOTSTRAP_ADMIN_PASSWORD is required` | На сервисе запущен предыдущий код или выбрана другая ветка |
 | `DisallowedHost` | Backend-домен в `DJANGO_ALLOWED_HOSTS` |
 | Health check 503 | Сервер запускается, но база не отвечает |
 | CORS/CSRF после успешного запуска | Точный домен фронтенда/админки и схему HTTPS |
 
 Не публикуйте значения секретов, токенов, паролей или `DATABASE_URL` при передаче логов.
+
+Сбой `0004` из-за pending trigger events происходит внутри атомарной PostgreSQL-миграции. После доставки исправления обычный `migrate --noinput` повторно применит её; сбрасывать базу или помечать миграцию выполненной не требуется. Уже применённая `0004` повторно не выполняется, итоговые поля и ограничения остались прежними. Объяснение взаимодействия `RunPython` и изменения схемы: [документация Django](https://docs.djangoproject.com/en/5.2/ref/migration-operations/#runpython).
 
 Источники: [Django на Render](https://render.com/docs/deploy-django), [версии Python](https://render.com/docs/python-version), [health checks](https://render.com/docs/health-checks), [бесплатный Render](https://render.com/docs/free), [HEAD-проверки UptimeRobot](https://help.uptimerobot.com/en/articles/11358466-how-to-debug-a-monitor-showing-as-down-in-uptimerobot).
