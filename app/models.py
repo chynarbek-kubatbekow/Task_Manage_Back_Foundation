@@ -1,4 +1,5 @@
 import uuid
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -34,6 +35,17 @@ class Company(TimestampedModel):
         enabled = self.settings.get("enabled_modules")
         return module in (enabled if enabled is not None else self.AVAILABLE_MODULES)
 
+    def clean(self):
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError, TypeError):
+            raise ValidationError({"timezone": "Укажите существующий часовой пояс IANA."})
+        if not isinstance(self.settings, dict):
+            raise ValidationError({"settings": "Настройки должны быть JSON-объектом."})
+        enabled = self.settings.get("enabled_modules")
+        if enabled is not None and (not isinstance(enabled, list) or any(module not in self.AVAILABLE_MODULES for module in enabled)):
+            raise ValidationError({"settings": "enabled_modules должен содержать список известных модулей."})
+
 
 class Role(TimestampedModel):
     company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="roles")
@@ -49,6 +61,10 @@ class Role(TimestampedModel):
 
     def __str__(self):
         return f"{self.name} — {self.company}"
+
+    def clean(self):
+        if not isinstance(self.permissions, list) or any(not isinstance(value,str) for value in self.permissions):
+            raise ValidationError({"permissions": "Права должны быть списком строк."})
 
 
 class Membership(TimestampedModel):
@@ -80,9 +96,11 @@ class Membership(TimestampedModel):
         return super().save(*args, **kwargs)
 
     def has_permission(self, permission):
+        if not self.is_active or not self.user.is_active or not self.company.is_active:
+            return False
         if self.user.is_superuser:
             return True
-        return self.roles.filter(permissions__contains=[permission]).exists()
+        return any("*" in role.permissions or permission in role.permissions for role in self.roles.all())
 
     def __str__(self):
         return f"{self.user} — {self.company}"
@@ -151,6 +169,12 @@ class Service(CompanyOwnedModel):
 
     def __str__(self): return self.name
 
+    def clean(self):
+        if self.duration_minutes is not None and not 5 <= self.duration_minutes <= 480:
+            raise ValidationError({"duration_minutes": "Длительность должна быть от 5 до 480 минут."})
+        if self.price is not None and self.price < 0:
+            raise ValidationError({"price": "Стоимость не может быть отрицательной."})
+
 
 class Resource(CompanyOwnedModel):
     name = models.CharField(max_length=255)
@@ -189,6 +213,14 @@ class StatusDefinition(CompanyOwnedModel):
     def __str__(self):
         return f"{self.get_entity_type_display()}: {self.name}"
 
+    def save(self, *args, **kwargs):
+        if self.is_default and self.company_id:
+            with transaction.atomic():
+                Company.objects.select_for_update().get(pk=self.company_id)
+                StatusDefinition.objects.filter(company_id=self.company_id, entity_type=self.entity_type, is_default=True).exclude(pk=self.pk).update(is_default=False)
+                return super().save(*args, **kwargs)
+        return super().save(*args, **kwargs)
+
 
 class WorkSchedule(CompanyOwnedModel):
     employee = models.ForeignKey(Membership, on_delete=models.CASCADE, related_name="work_schedules")
@@ -208,7 +240,7 @@ class WorkSchedule(CompanyOwnedModel):
     def clean(self):
         if self.employee_id and self.company_id != self.employee.company_id:
             raise ValidationError("Сотрудник должен принадлежать той же компании.")
-        if self.start_time >= self.end_time:
+        if self.start_time and self.end_time and self.start_time >= self.end_time:
             raise ValidationError("Время окончания должно быть позже начала.")
         if self.valid_from and self.valid_to and self.valid_from > self.valid_to:
             raise ValidationError("Дата начала периода позже даты окончания.")
@@ -232,7 +264,7 @@ class TimeOff(CompanyOwnedModel):
     def clean(self):
         if self.employee_id and self.company_id != self.employee.company_id:
             raise ValidationError("Сотрудник должен принадлежать той же компании.")
-        if self.starts_at >= self.ends_at:
+        if self.starts_at and self.ends_at and self.starts_at >= self.ends_at:
             raise ValidationError("Окончание должно быть позже начала.")
 
 
@@ -259,6 +291,8 @@ class Appointment(CompanyOwnedModel):
         indexes = [models.Index(fields=["company", "starts_at"]), models.Index(fields=["employee", "starts_at", "ends_at"])]
 
     def clean(self):
+        if not self.starts_at or not self.ends_at or not self.client_id or not self.employee_id or not self.status_id:
+            return
         if self.starts_at >= self.ends_at:
             raise ValidationError("Окончание записи должно быть позже начала.")
         for obj, label in ((self.client, "Клиент"), (self.employee, "Сотрудник"), (self.status, "Статус"), (self.service, "Услуга")):
@@ -269,7 +303,7 @@ class Appointment(CompanyOwnedModel):
         overlap = Appointment.objects.filter(company=self.company, employee=self.employee, starts_at__lt=self.ends_at, ends_at__gt=self.starts_at, cancelled_at__isnull=True)
         if self.pk:
             overlap = overlap.exclude(pk=self.pk)
-        if overlap.exists():
+        if not self.cancelled_at and overlap.exists():
             raise ValidationError("У сотрудника уже есть запись в это время.")
 
     def __str__(self):
@@ -308,6 +342,12 @@ class Task(CompanyOwnedModel):
         for obj, label in ((self.client, "Клиент"), (self.appointment, "Запись"), (self.parent, "Родительская задача")):
             if obj and obj.company_id != self.company_id:
                 raise ValidationError(f"{label} принадлежит другой компании.")
+        parent, visited = self.parent, {self.pk}
+        while parent:
+            if parent.pk in visited:
+                raise ValidationError({"parent": "Задача не может быть родителем самой себя или образовывать цикл."})
+            visited.add(parent.pk)
+            parent = parent.parent
 
     def __str__(self):
         return self.title
@@ -326,6 +366,8 @@ class Comment(CompanyOwnedModel):
         constraints = [models.CheckConstraint(condition=(Q(task__isnull=False, appointment__isnull=True) | Q(task__isnull=True, appointment__isnull=False)), name="comment_exactly_one_target")]
 
     def clean(self):
+        if bool(self.task_id) == bool(self.appointment_id):
+            raise ValidationError("Укажите ровно одну цель комментария: задачу или запись.")
         target = self.task or self.appointment
         if target and target.company_id != self.company_id:
             raise ValidationError("Объект комментария принадлежит другой компании.")

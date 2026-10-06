@@ -39,10 +39,16 @@ if os.getenv("RENDER") and not os.getenv("DATABASE_URL"):
 if os.getenv("DATABASE_URL"):
     DATABASES = {"default": dj_database_url.config(conn_max_age=60, conn_health_checks=True, ssl_require=not DEBUG)}
     DATABASES["default"]["DISABLE_SERVER_SIDE_CURSORS"] = True
+    if DATABASES["default"]["ENGINE"] == "django.db.backends.postgresql":
+        DATABASES["default"].setdefault("OPTIONS", {}).setdefault("connect_timeout", 3)
+        DATABASES["default"]["OPTIONS"].setdefault("prepare_threshold", None)
 elif os.getenv("POSTGRES_DB"):
     DATABASES = {"default": {"ENGINE": "django.db.backends.postgresql", "NAME": os.getenv("POSTGRES_DB"), "USER": os.getenv("POSTGRES_USER"), "PASSWORD": os.getenv("POSTGRES_PASSWORD"), "HOST": os.getenv("POSTGRES_HOST", "localhost"), "PORT": os.getenv("POSTGRES_PORT", "5432"), "CONN_MAX_AGE": 60}}
 else:
     DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}}
+
+if os.getenv("RENDER") and DATABASES["default"]["ENGINE"] != "django.db.backends.postgresql":
+    raise RuntimeError("Render requires a PostgreSQL DATABASE_URL. SQLite is only supported locally.")
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -72,6 +78,8 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 SECURE_SSL_REDIRECT = os.getenv("SECURE_SSL_REDIRECT", "False").lower() == "true"
+# Render's internal probes must execute the database check rather than pass on a redirect.
+SECURE_REDIRECT_EXEMPT = [r"^$", r"^health/?$", r"^api/v1/health/?$"]
 SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "0"))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = SECURE_HSTS_SECONDS > 0
 SECURE_HSTS_PRELOAD = SECURE_HSTS_SECONDS > 0

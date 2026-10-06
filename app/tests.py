@@ -188,3 +188,57 @@ class FoundationTests(TestCase):
         )
         self.assertEqual(response.status_code, 204)
         self.assertFalse(Appointment.objects.filter(id=appointment_id).exists())
+
+    def future_workday(self):
+        selected = timezone.localdate() + timedelta(days=7)
+        while selected.weekday() >= 5:
+            selected += timedelta(days=1)
+        return timezone.make_aware(datetime.combine(selected, time(10)))
+
+    def test_reschedule_can_overlap_original_and_preserves_history(self):
+        start = self.future_workday()
+        original = Appointment.objects.create(company=self.company, client=self.client, employee=self.member,
+            status=self.status, title="Original", starts_at=start, ends_at=start + timedelta(hours=1))
+        response = self.api.post(f"/api/v1/appointments/{original.pk}/reschedule/",
+            {"starts_at": (start + timedelta(minutes=30)).isoformat(), "ends_at": (start + timedelta(minutes=90)).isoformat()},
+            format="json", HTTP_X_COMPANY_ID=str(self.company.pk))
+        self.assertEqual(response.status_code, 201, response.data)
+        original.refresh_from_db()
+        self.assertIsNotNone(original.cancelled_at)
+        self.assertEqual(str(response.data["rescheduled_from"]), str(original.pk))
+        self.assertEqual(Appointment.objects.filter(company=self.company, cancelled_at__isnull=True).count(), 1)
+
+    def test_failed_reschedule_keeps_original_active(self):
+        start = self.future_workday()
+        original = Appointment.objects.create(company=self.company, client=self.client, employee=self.member,
+            status=self.status, title="Original", starts_at=start, ends_at=start + timedelta(hours=1))
+        Appointment.objects.create(company=self.company, client=self.client, employee=self.member,
+            status=self.status, title="Occupied", starts_at=start + timedelta(hours=2), ends_at=start + timedelta(hours=3))
+        response = self.api.post(f"/api/v1/appointments/{original.pk}/reschedule/",
+            {"starts_at": (start + timedelta(hours=2)).isoformat(), "ends_at": (start + timedelta(hours=3)).isoformat()},
+            format="json", HTTP_X_COMPANY_ID=str(self.company.pk))
+        self.assertEqual(response.status_code, 400, response.data)
+        original.refresh_from_db()
+        self.assertIsNone(original.cancelled_at)
+        self.assertEqual(original.cancellation_reason, "")
+
+    def test_day_filter_excludes_next_days(self):
+        start = self.future_workday()
+        for offset in (0, 1, 2):
+            Appointment.objects.create(company=self.company, client=self.client, employee=self.member,
+                status=self.status, title=f"Day {offset}", starts_at=start + timedelta(days=offset), ends_at=start + timedelta(days=offset, hours=1))
+        response = self.api.get("/api/v1/appointments/", {"start": start.replace(hour=0).isoformat(), "end": (start.replace(hour=0) + timedelta(days=1)).isoformat()}, HTTP_X_COMPANY_ID=str(self.company.pk))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["title"], "Day 0")
+
+    def test_slots_use_company_timezone(self):
+        from zoneinfo import ZoneInfo
+        self.company.timezone = "America/New_York"
+        self.company.save(update_fields=["timezone"])
+        selected = self.future_workday().date()
+        response = self.api.get("/api/v1/appointments/available-slots/", {"employee": str(self.member.pk), "date": selected.isoformat()}, HTTP_X_COMPANY_ID=str(self.company.pk))
+        self.assertEqual(response.status_code, 200, response.data)
+        first = datetime.fromisoformat(response.data["slots"][0]["starts_at"])
+        self.assertEqual(first.astimezone(ZoneInfo("America/New_York")).hour, 9)
+        self.assertEqual(first.utcoffset(), datetime.combine(selected, time(9), ZoneInfo("America/New_York")).utcoffset())

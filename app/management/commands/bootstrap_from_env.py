@@ -1,7 +1,7 @@
 import os
 
 from django.core.management import call_command
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand
 
 
 class Command(BaseCommand):
@@ -9,12 +9,13 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         config = {
-            "company": os.getenv("BOOTSTRAP_COMPANY_NAME", "Fundament"),
-            "slug": os.getenv("BOOTSTRAP_COMPANY_SLUG", "fundament"),
-            "username": os.getenv("BOOTSTRAP_ADMIN_USERNAME", "owner"),
+            "company": os.getenv("BOOTSTRAP_COMPANY_NAME", "").strip() or "Fundament",
+            "slug": os.getenv("BOOTSTRAP_COMPANY_SLUG", "").strip() or "fundament",
+            "username": os.getenv("BOOTSTRAP_ADMIN_USERNAME", "").strip() or "owner",
             "email": os.getenv("BOOTSTRAP_ADMIN_EMAIL", ""),
             "password": os.getenv("BOOTSTRAP_ADMIN_PASSWORD", ""),
         }
         if not config["password"]:
-            raise CommandError("BOOTSTRAP_ADMIN_PASSWORD is required.")
+            self.stdout.write("Bootstrap skipped: BOOTSTRAP_ADMIN_PASSWORD is not set. Existing data is unchanged.")
+            return
         call_command("bootstrap_company", **config)

@@ -1,5 +1,6 @@
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import BasePermission
+from django.core.exceptions import ValidationError as DjangoValidationError
 
 from .models import Company, Membership
 
@@ -15,7 +16,7 @@ class CompanyContextMixin:
             raise ValidationError({"company": "Передайте X-Company-ID в заголовке."})
         try:
             company = Company.objects.get(pk=company_id, is_active=True)
-        except (Company.DoesNotExist, ValueError):
+        except (Company.DoesNotExist, ValueError, DjangoValidationError):
             raise NotFound("Компания не найдена.")
         if not self.request.user.is_superuser:
             membership = Membership.objects.filter(user=self.request.user, company=company, is_active=True).prefetch_related("roles").first()

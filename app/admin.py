@@ -3,9 +3,12 @@ from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from django.db import models as django_models
+from django.db import transaction
 
 from .models import (Appointment, AuditLog, Client, Comment, Company, Membership,
                      Resource, Role, Service, StatusDefinition, Task, TimeOff, WorkSchedule)
+from .admin_forms import CompanyForm, CompanyRelationForm
+from .admin_scope import ScopedAdmin
 
 
 admin.site.site_header = "Фундамент — управление системой"
@@ -15,6 +18,7 @@ admin.site.index_title = "Компании, пользователи и рабо
 
 class MembershipInline(admin.StackedInline):
     model = Membership
+    form = CompanyRelationForm
     extra = 1
     fields = ["company", "roles", "job_title", "phone", "color", "is_active"]
     formfield_overrides = {
@@ -41,8 +45,19 @@ class UserAdmin(DjangoUserAdmin):
     list_display = ["username", "email", "first_name", "last_name", "is_staff", "is_active"]
     search_fields = ["username", "first_name", "last_name", "email"]
 
+    def has_module_permission(self, request):
+        return request.user.is_superuser
 
-class CompanyFilterAdmin(admin.ModelAdmin):
+    def has_view_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+    def has_add_permission(self, request):
+        return request.user.is_superuser
+    has_change_permission = has_view_permission
+    has_delete_permission = has_view_permission
+
+
+class CompanyFilterAdmin(ScopedAdmin):
     list_filter = ["company"]
     autocomplete_fields = []
 
@@ -55,16 +70,22 @@ class CompanyFilterAdmin(admin.ModelAdmin):
 
 
 @admin.register(Company)
-class CompanyAdmin(admin.ModelAdmin):
+class CompanyAdmin(ScopedAdmin):
+    form = CompanyForm
     list_display = ["name", "slug", "timezone", "is_active", "created_at"]
     list_filter = ["is_active", "timezone"]
     search_fields = ["name", "slug"]
     prepopulated_fields = {"slug": ("name",)}
+    readonly_fields = ["created_at", "updated_at"]
+
+    def has_add_permission(self, request):
+        return request.user.is_superuser
 
 
 @admin.register(Role)
 class RoleAdmin(CompanyFilterAdmin):
     PERMISSION_CHOICES = [
+        ("*", "Полный доступ ко всем API-функциям компании"),
         ("dashboard.view", "Главная: просмотр"),
         ("dashboard.view_all", "Главная: видеть всю компанию"),
         ("clients.view", "Пациенты: просмотр"),
@@ -111,6 +132,8 @@ class RoleAdmin(CompanyFilterAdmin):
             self.fields["permission_flags"].choices = RoleAdmin.PERMISSION_CHOICES
             if self.instance and self.instance.pk:
                 self.initial["permission_flags"] = self.instance.permissions
+                known = {value for value, _ in self.fields["permission_flags"].choices}
+                self.fields["permission_flags"].choices = [*self.fields["permission_flags"].choices, *[(value, f"Дополнительное право: {value}") for value in self.instance.permissions if value not in known]]
 
         def save(self, commit=True):
             instance = super().save(commit=False)
@@ -124,6 +147,14 @@ class RoleAdmin(CompanyFilterAdmin):
     search_fields = ["name", "code", "company__name"]
     prepopulated_fields = {"code": ("name",)}
 
+    def has_delete_permission(self, request, obj=None):
+        return super().has_delete_permission(request, obj) and not (obj and obj.is_system)
+
+    def get_actions(self, request):
+        actions = super().get_actions(request)
+        actions.pop("delete_selected", None)
+        return actions
+
 
 @admin.register(Membership)
 class MembershipAdmin(CompanyFilterAdmin):
@@ -131,6 +162,7 @@ class MembershipAdmin(CompanyFilterAdmin):
     list_filter = ["company", "is_active", "roles"]
     search_fields = ["user__username", "user__first_name", "user__last_name", "phone", "job_title"]
     filter_horizontal = ["roles"]
+    readonly_fields = ["employee_number", "created_at", "updated_at"]
 
 
 @admin.register(Client)
@@ -138,6 +170,10 @@ class ClientAdmin(CompanyFilterAdmin):
     list_display = ["patient_number", "__str__", "company", "phone", "primary_doctor", "is_active", "updated_at"]
     list_filter = ["company", "is_active"]
     search_fields = ["first_name", "last_name", "patronymic", "phone", "email", "diagnosis", "doctor_notes", "notes"]
+    readonly_fields = ["patient_number", "created_at", "updated_at"]
+    fieldsets = [("Пациент", {"fields": ("company","patient_number","last_name","first_name","patronymic","birth_date","is_active")}),
+        ("Контакты", {"fields": ("phone","email")}), ("Медицинская карточка", {"fields": ("primary_doctor","diagnosis","doctor_notes")}),
+        ("Дополнительно", {"fields": ("notes","tags","extra_data","created_at","updated_at")})]
 
 
 @admin.register(Service)
@@ -177,10 +213,24 @@ class TimeOffAdmin(CompanyFilterAdmin):
 
 @admin.register(Appointment)
 class AppointmentAdmin(CompanyFilterAdmin):
-    list_display = ["title", "client", "employee", "starts_at", "status", "company"]
+    list_display = ["title", "client", "employee", "starts_at", "ends_at", "status", "cancelled_at", "company"]
     list_filter = ["company", "status", "employee", "cancelled_at"]
     search_fields = ["title", "client__first_name", "client__last_name", "client__phone", "notes"]
     date_hierarchy = "starts_at"
+    readonly_fields = ["created_by", "rescheduled_from", "created_at", "updated_at"]
+    actions = ["cancel_appointments"]
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    @admin.action(description="Отменить выбранные записи с сохранением истории", permissions=["change"])
+    @transaction.atomic
+    def cancel_appointments(self, request, queryset):
+        from django.utils import timezone
+        for obj in queryset.filter(cancelled_at__isnull=True):
+            obj.cancelled_at=timezone.now(); obj.cancellation_reason="Отменено через админку"
+            obj.save(update_fields=["cancelled_at","cancellation_reason","updated_at"])
+            self.audit(request,obj,"cancel")
 
 
 @admin.register(Task)
@@ -189,6 +239,14 @@ class TaskAdmin(CompanyFilterAdmin):
     list_filter = ["company", "status", "priority", "assignees"]
     search_fields = ["title", "description"]
     filter_horizontal = ["assignees"]
+    readonly_fields = ["created_by", "created_at", "updated_at"]
+    date_hierarchy = "due_at"
+
+    def save_model(self, request, obj, form, change):
+        from django.utils import timezone
+        if "status" in form.changed_data and "completed_at" not in form.changed_data:
+            obj.completed_at = timezone.now() if obj.status.is_closed else None
+        super().save_model(request,obj,form,change)
 
 
 @admin.register(Comment)
@@ -198,7 +256,7 @@ class CommentAdmin(CompanyFilterAdmin):
 
 
 @admin.register(AuditLog)
-class AuditLogAdmin(admin.ModelAdmin):
+class AuditLogAdmin(CompanyFilterAdmin):
     list_display = ["created_at", "actor", "action", "model_name", "object_repr", "company"]
     list_filter = ["company", "action", "model_name"]
     search_fields = ["object_repr", "object_id", "actor__username"]
@@ -208,4 +266,7 @@ class AuditLogAdmin(admin.ModelAdmin):
         return False
 
     def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
         return False
